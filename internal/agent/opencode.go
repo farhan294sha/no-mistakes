@@ -14,8 +14,8 @@ import (
 var errOpencodeThinkingToolChoiceConflict = errors.New("opencode provider rejects required tool choice while thinking is enabled")
 
 // errOpencodeToolsAlreadyRan annotates a failure whose turn had already
-// invoked a tool. The prompt-only fallback re-runs the whole prompt in a
-// fresh session, so it must not be taken past this marker.
+// invoked a tool. The prompt-only fallback re-runs the whole prompt, so it
+// must not be taken past this marker.
 var errOpencodeToolsAlreadyRan = errors.New("the failed turn already ran tools")
 
 // errOpencodeToolActivityUnknown annotates a failure whose turn could not be
@@ -28,7 +28,7 @@ var errOpencodeToolActivityUnknown = errors.New("could not verify the failed tur
 // thinkingConflict builds the fallback trigger, carrying the turn's tool
 // evidence. A session.error can arrive at any point in a turn, so the
 // conflict is not always detected before the model has acted, and the
-// fallback is another fresh session.
+// fallback sends the whole prompt again.
 func thinkingConflict(evidence opencodeToolEvidence, cause error) error {
 	err := errOpencodeThinkingToolChoiceConflict
 	if !evidence.replaySafe() {
@@ -63,6 +63,11 @@ type opencodeAgent struct {
 
 func (a *opencodeAgent) Name() string { return "opencode" }
 
+// SupportsSessionResume reports opencode's durable-session capability:
+// sessions persist in opencode's own database across `opencode serve`
+// restarts, and a further message to an existing session continues it.
+func (a *opencodeAgent) SupportsSessionResume() bool { return true }
+
 func (a *opencodeAgent) ReportsAgentAttempts() bool { return true }
 
 func (a *opencodeAgent) Run(ctx context.Context, opts RunOpts) (*Result, error) {
@@ -90,7 +95,7 @@ func (a *opencodeAgent) runOnce(ctx context.Context, opts RunOpts) (*Result, err
 		return result, err
 	}
 
-	// The fallback is a second attempt in a fresh session, so a turn that
+	// The fallback sends the whole prompt again, so a turn that
 	// already invoked a tool would replay its side effects - and so would one
 	// whose tool activity could not be established. Same reasoning as
 	// classifyOpencodeTransient, and the same fail-closed answer: report the
@@ -106,12 +111,12 @@ func (a *opencodeAgent) runOnce(ctx context.Context, opts RunOpts) (*Result, err
 	emitAgentControl(opts, LifecycleEvent{
 		Agent:   a.Name(),
 		Phase:   LifecyclePhaseFallback,
-		Message: "opencode starting a fresh prompt-only structured output session",
+		Message: "opencode retrying with prompt-only structured output",
 	})
 	// Both turns really ran and both cost tokens, so the single row this
-	// invocation records must carry both. Each attempt is its own fresh
-	// session and opencode never reports cumulatively, so the two are
-	// independent deltas that simply add.
+	// invocation records must carry both. opencode reports usage per message,
+	// never cumulatively - even when both turns share a resumed session - so
+	// the two are independent deltas that simply add.
 	nativeUsage := TokenUsage{}
 	if result != nil {
 		nativeUsage = result.Usage
@@ -137,13 +142,41 @@ func (a *opencodeAgent) runOnceWithFormat(ctx context.Context, opts RunOpts, nat
 		return nil, err
 	}
 
-	// Create session with blanket permissions
-	sessionID, err := a.createSession(ctx, baseURL, opts.CWD)
+	sessionID, err := a.openSession(ctx, baseURL, opts)
 	if err != nil {
 		return nil, err
 	}
-	defer a.deleteSession(baseURL, sessionID)
+	result, err := a.runTurn(ctx, opts, baseURL, sessionID, nativeFormat)
 
+	// A cold session is single-use. A durable one outlives a successful turn
+	// so a later turn can resume it, while one this attempt created and did
+	// not complete is deleted because the pipeline never records it. A resumed
+	// session is kept even when the turn fails: the retry and the prompt-only
+	// fallback continue in it, and the pipeline drops a dead identity itself.
+	if opts.Session == nil {
+		a.deleteSession(baseURL, sessionID)
+		return result, err
+	}
+	resumed := opts.Session.ID != ""
+	if err != nil && !resumed {
+		a.deleteSession(baseURL, sessionID)
+		return result, err
+	}
+	if result == nil {
+		result = &Result{}
+	}
+	result.SessionID = sessionID
+	if err != nil {
+		return result, err
+	}
+	result.Resumed = resumed
+	// Each message reports its own tokens, including in a resumed session.
+	result.SessionUsageCumulative = false
+	return result, nil
+}
+
+// runTurn sends one prompt to sessionID and reads the turn to completion.
+func (a *opencodeAgent) runTurn(ctx context.Context, opts RunOpts, baseURL, sessionID string, nativeFormat bool) (*Result, error) {
 	// Build prompt with schema instructions if provided
 	prompt := opts.Prompt
 	if len(opts.JSONSchema) > 0 {
