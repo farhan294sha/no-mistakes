@@ -248,6 +248,11 @@ func (s *fakeOpencodeServer) handleSessionRoot(w http.ResponseWriter, r *http.Re
 			return
 		}
 	}
+	// Real opencode binds a session to the `directory` query parameter; the
+	// body field is honoured only for older callers.
+	if dir := r.URL.Query().Get("directory"); dir != "" {
+		body.Directory = dir
+	}
 	if body.Directory == "" {
 		wd, err := os.Getwd()
 		if err != nil {
@@ -280,8 +285,9 @@ func (s *fakeOpencodeServer) nextSessionID() string {
 }
 
 // handleSessionPath dispatches /session/{id}, /session/{id}/message, and
-// /session/{id}/abort. The DELETE variant just responds 200; abort and
-// delete don't need scenario interaction.
+// /session/{id}/abort. GET answers the session's bound directory so a resumed
+// fixer session can be verified, or 404 once deleted; abort and delete don't
+// need scenario interaction.
 func (s *fakeOpencodeServer) handleSessionPath(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/session/"), "/")
 	if len(parts) == 0 || parts[0] == "" {
@@ -290,6 +296,14 @@ func (s *fakeOpencodeServer) handleSessionPath(w http.ResponseWriter, r *http.Re
 	}
 	sessionID := parts[0]
 	switch {
+	case len(parts) == 1 && r.Method == http.MethodGet:
+		dir := s.sessionDir(sessionID)
+		if dir == "" {
+			w.WriteHeader(http.StatusNotFound)
+			writeJSON(w, map[string]any{"name": "NotFoundError", "data": map[string]string{"message": "Session not found: " + sessionID}})
+			return
+		}
+		writeJSON(w, map[string]string{"id": sessionID, "directory": dir})
 	case len(parts) == 1 && r.Method == http.MethodDelete:
 		s.forgetSessionDir(sessionID)
 		w.WriteHeader(http.StatusOK)

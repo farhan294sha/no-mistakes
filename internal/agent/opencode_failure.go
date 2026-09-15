@@ -97,10 +97,10 @@ func (e *opencodeMessageFailure) label() string {
 func classifyOpencodeTransient(err error) (string, bool) {
 	var failure *opencodeMessageFailure
 	if errors.As(err, &failure) {
-		// A retry starts a FRESH opencode session (runOnce always calls
-		// createSession), so it replays the whole prompt with no memory of
-		// the tools the failed attempt already executed - a second commit, a
-		// second file write, a second posted comment. Nothing in the wire
+		// A retry replays the whole prompt - in a fresh opencode session, or
+		// as a repeated turn of a resumed one - and nothing makes the model
+		// skip the tools the failed attempt already executed: a second commit,
+		// a second file write, a second posted comment. Nothing in the wire
 		// protocol says which of those were idempotent, so a turn that got
 		// as far as running a tool fails closed and the operator decides.
 		// The failure this retry exists for - a provider blip that kills the
@@ -131,7 +131,7 @@ func isOpencodeToolPart(partType string) bool {
 
 // opencodeToolEvidence is the three-valued answer to "did the failed turn run
 // a tool". Both the retry and the prompt-only fallback replay the whole
-// prompt in a FRESH session, so only a PROOF that no tool ran can authorise
+// prompt, so only a PROOF that no tool ran can authorise
 // one, and silence is not that proof: the stream is what carries the tool
 // events, so a stream that dies mid-turn can leave a tool already executed,
 // its event undelivered, and the message response that lists it still in
@@ -151,7 +151,7 @@ const (
 	opencodeToolsRan
 )
 
-// replaySafe reports whether the turn may be run again in a fresh session.
+// replaySafe reports whether the turn's prompt may be sent again.
 func (e opencodeToolEvidence) replaySafe() bool { return e == opencodeToolsNone }
 
 func (e opencodeToolEvidence) String() string {
