@@ -274,9 +274,11 @@ agent_args_override:
 
 ### review_agents
 
-Optional, **global-only** harness and model/effort overrides for the review loop.
-Repository `.no-mistakes.yaml` cannot set these profiles. Omitted roles keep the
-normal `agent` selection and fallback chain; other pipeline steps are unchanged.
+Optional harness and model/effort overrides for the review loop. A repository's
+trusted default-branch `.no-mistakes.yaml` can override these roles one at a time
+(see [Repo Config `review_agents`](/no-mistakes/reference/repo-config/#review_agents)).
+Omitted roles keep the normal `agent` selection and fallback chain; other
+pipeline steps are unchanged.
 
 ```yaml
 review_agents:

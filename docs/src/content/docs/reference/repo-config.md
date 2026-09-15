@@ -7,7 +7,7 @@ Per-repo configuration lives in `.no-mistakes.yaml` at the root of your reposito
 
 :::caution[Security: gate-control fields are read from the default branch]
 `commands.*` and `gates[].command` execute arbitrary shell on the daemon host via `sh -c` / `cmd.exe /c`, and `agent` selects which process launches there (including ordered fallback lists, ACP aliases such as `cursor`, and `acp:` targets) with the maintainer's credentials.
-To prevent a supply-chain attack where a contributor lands a hostile value on a gated branch, the daemon always reads **`commands` and `agent` from your default branch** (e.g. `origin/main`), never from the pushed SHA, and reads them at the exact commit a fresh fetch resolved (so a stale `origin/<default>` ref cannot serve a value the live default branch removed).
+To prevent a supply-chain attack where a contributor lands a hostile value on a gated branch, the daemon always reads **`commands`, `agent`, and `review_agents` from your default branch** (e.g. `origin/main`), never from the pushed SHA, and reads them at the exact commit a fresh fetch resolved (so a stale `origin/<default>` ref cannot serve a value the live default branch removed).
 The daemon also reads `document.instructions`, `review.path_instructions`, `gates`, `protected_paths`, `disable_project_settings`, `no_ci`, `ci.rerun_transient`, `ci.revalidate_repairs`, `test.instructions`, `test.allow_approve_over_failure`, `test.evidence.branch`, `pr.template`, and `pr.publish_intent` only from that trusted copy.
 `pr.base_branch` is trusted-default-branch-only as well, but unlike those fields it follows the same `allow_repo_commands: true` opt-in exception as `commands`/`agent` (see [`pr.base_branch`](#prbase_branch) below).
 If the default branch cannot be fetched and resolved to a readable commit, or its present `.no-mistakes.yaml` cannot be read and parsed, the run aborts before launching an agent.
@@ -145,9 +145,32 @@ If a pipeline invocation fails because that agent process cannot start or exits 
 Structured findings and schema/output validation problems do not trigger fallback.
 This per-repo `agent` value, including every fallback entry, is still read from the trusted default-branch `.no-mistakes.yaml` unless `allow_repo_commands` is enabled there.
 
+### review_agents
+
+Pin the review loop's `reviewer` and `fixer` harnesses for this repository.
+
+| | |
+| --- | --- |
+| Type | map of `reviewer` / `fixer` to `{agent, model, effort}` |
+| Default | Inherits the global [`review_agents`](/no-mistakes/reference/global-config/#review_agents) |
+
+```yaml
+review_agents:
+  reviewer:
+    agent: opencode
+    model: opencode/muse-spark-1.3-contributor-free
+  fixer:
+    agent: claude
+    model: claude-opus-5
+```
+
+Each role follows the same rules as the global field: one explicit `agent` (no `auto` or lists), with `model` and `effort` optional and inherited from the global `agent_config` for that harness when empty.
+A role set here replaces the global role of the same name; a role left out keeps the global one.
+Like `agent`, it selects which process launches on the daemon host, so it is read from the trusted default-branch `.no-mistakes.yaml` unless `allow_repo_commands` is enabled there.
+
 ### allow_repo_commands
 
-Opt in to honoring the code-executing selection fields (`commands.{prepare,test,lint,format}` and `agent`) from a contributor's pushed branch instead of the trusted default-branch copy.
+Opt in to honoring the code-executing selection fields (`commands.{prepare,test,lint,format}`, `agent`, and `review_agents`) from a contributor's pushed branch instead of the trusted default-branch copy.
 
 | | |
 | --- | --- |
