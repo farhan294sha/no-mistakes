@@ -251,6 +251,12 @@ type RepoConfig struct {
 	// the pushed SHA), so a contributor cannot self-enable. Default false:
 	// the pushed branch controls nothing that executes.
 	AllowRepoCommands bool `yaml:"allow_repo_commands"`
+	// ReviewAgents pins the review loop's reviewer and fixer harnesses for this
+	// repository, overlaying the global review_agents role by role. It selects
+	// which process launches on the daemon host, so EffectiveRepoConfig treats
+	// it exactly like agent: trusted default-branch copy only, unless
+	// allow_repo_commands opts into the pushed branch.
+	ReviewAgents map[string]ReviewAgent `yaml:"review_agents,omitempty"`
 	// PR carries pull-request settings. BaseBranch controls where a PR lands,
 	// Template and PublishIntent control trusted publication policy, and
 	// TitleFormat controls repository title convention. EffectiveRepoConfig keeps
@@ -460,23 +466,24 @@ func RenderedInstructions(instructions string) string {
 
 func (c *RepoConfig) UnmarshalYAML(value *yaml.Node) error {
 	type repoConfigRaw struct {
-		Agent                  agentList    `yaml:"agent"`
-		Commands               Commands     `yaml:"commands"`
-		IgnorePatterns         []string     `yaml:"ignore_patterns"`
-		ProtectedPaths         []string     `yaml:"protected_paths"`
-		AllowRepoCommands      bool         `yaml:"allow_repo_commands"`
-		AutoFix                AutoFixRaw   `yaml:"auto_fix"`
-		CI                     CIRaw        `yaml:"ci"`
-		Commit                 CommitRaw    `yaml:"commit"`
-		Intent                 IntentRaw    `yaml:"intent"`
-		Test                   TestRaw      `yaml:"test"`
-		PR                     PRRaw        `yaml:"pr"`
-		Document               DocumentRaw  `yaml:"document"`
-		Review                 ReviewRaw    `yaml:"review"`
-		Gates                  []Gate       `yaml:"gates"`
-		DisableProjectSettings bool         `yaml:"disable_project_settings"`
-		NoCI                   bool         `yaml:"no_ci"`
-		Providers              ProvidersRaw `yaml:"providers"`
+		Agent                  agentList              `yaml:"agent"`
+		Commands               Commands               `yaml:"commands"`
+		IgnorePatterns         []string               `yaml:"ignore_patterns"`
+		ProtectedPaths         []string               `yaml:"protected_paths"`
+		AllowRepoCommands      bool                   `yaml:"allow_repo_commands"`
+		ReviewAgents           map[string]ReviewAgent `yaml:"review_agents"`
+		AutoFix                AutoFixRaw             `yaml:"auto_fix"`
+		CI                     CIRaw                  `yaml:"ci"`
+		Commit                 CommitRaw              `yaml:"commit"`
+		Intent                 IntentRaw              `yaml:"intent"`
+		Test                   TestRaw                `yaml:"test"`
+		PR                     PRRaw                  `yaml:"pr"`
+		Document               DocumentRaw            `yaml:"document"`
+		Review                 ReviewRaw              `yaml:"review"`
+		Gates                  []Gate                 `yaml:"gates"`
+		DisableProjectSettings bool                   `yaml:"disable_project_settings"`
+		NoCI                   bool                   `yaml:"no_ci"`
+		Providers              ProvidersRaw           `yaml:"providers"`
 	}
 	var raw repoConfigRaw
 	if err := value.Decode(&raw); err != nil {
@@ -488,6 +495,7 @@ func (c *RepoConfig) UnmarshalYAML(value *yaml.Node) error {
 	c.IgnorePatterns = raw.IgnorePatterns
 	c.ProtectedPaths = raw.ProtectedPaths
 	c.AllowRepoCommands = raw.AllowRepoCommands
+	c.ReviewAgents = raw.ReviewAgents
 	c.AutoFix = raw.AutoFix
 	c.CI = raw.CI
 	c.Commit = raw.Commit
@@ -2257,6 +2265,9 @@ func parseRepoConfig(data []byte) (*RepoConfig, error) {
 	if err := validateReviewRaw(cfg.Review); err != nil {
 		return nil, fmt.Errorf("parse repo config: %w", err)
 	}
+	if err := validateReviewAgents(cfg.ReviewAgents); err != nil {
+		return nil, fmt.Errorf("parse repo config: %w", err)
+	}
 	for i, pattern := range cfg.ProtectedPaths {
 		pattern = strings.TrimSpace(pattern)
 		if pattern == "" {
@@ -2391,7 +2402,7 @@ func validatePathInstructionGlob(pattern string) error {
 // When allowRepoCommands is
 // true the maintainer has explicitly opted in (via allow_repo_commands on the
 // TRUSTED default-branch copy) to honoring the pushed branch's commands and
-// agent selection.
+// agent selection (agent and review_agents).
 // When there is no trusted copy and the maintainer has not opted in, both
 // fields are forced empty (Agent "" and nil Agents inherit the global agent;
 // Commands{} yields built-in defaults) rather than falling back to the pushed
@@ -2502,10 +2513,12 @@ func EffectiveRepoConfig(pushed, trusted *RepoConfig, allowRepoCommands bool) *R
 		effective.Commands = trusted.Commands
 		effective.Agent = trusted.Agent
 		effective.Agents = copyAgents(trusted.Agents)
+		effective.ReviewAgents = copyReviewAgents(trusted.ReviewAgents)
 	} else {
 		effective.Commands = Commands{}
 		effective.Agent = ""
 		effective.Agents = nil
+		effective.ReviewAgents = nil
 	}
 	return &effective
 }
@@ -2896,7 +2909,7 @@ func Merge(global *GlobalConfig, repo *RepoConfig) *Config {
 		AgentPathOverride:     global.AgentPathOverride,
 		AgentArgsOverride:     global.AgentArgsOverride,
 		AgentConfig:           global.AgentConfig,
-		ReviewAgents:          global.ReviewAgents,
+		ReviewAgents:          mergeReviewAgents(global.ReviewAgents, repo.ReviewAgents),
 		CITimeout:             global.CITimeout,
 		StepQuietWarning:      global.StepQuietWarning,
 		AgentTimeout:          global.AgentTimeout,

@@ -48,3 +48,31 @@ func (c *Config) ForReviewAgent(entry ReviewAgent) *Config {
 	role.ReviewAgents = nil
 	return &role
 }
+
+// mergeReviewAgents overlays repository roles onto the operator's global roles,
+// one role at a time: a repository that pins only the reviewer keeps the global
+// fixer. repo is the EffectiveRepoConfig result, so it is already trusted-only.
+func mergeReviewAgents(global, repo map[string]ReviewAgent) map[string]ReviewAgent {
+	if len(repo) == 0 {
+		return global
+	}
+	merged := copyReviewAgents(global)
+	if merged == nil {
+		merged = make(map[string]ReviewAgent, len(repo))
+	}
+	for role, entry := range repo {
+		merged[role] = entry
+	}
+	return merged
+}
+
+func copyReviewAgents(roles map[string]ReviewAgent) map[string]ReviewAgent {
+	if roles == nil {
+		return nil
+	}
+	out := make(map[string]ReviewAgent, len(roles))
+	for role, entry := range roles {
+		out[role] = entry
+	}
+	return out
+}

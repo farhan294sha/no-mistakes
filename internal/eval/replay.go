@@ -478,6 +478,9 @@ func replayConfig(c Case) (*config.Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load captured repo config: %w", err)
 	}
+	// The candidate selects the reviewer harness, model, and effort. A captured
+	// repository review_agents pin would otherwise overlay it role by role.
+	repo.ReviewAgents = nil
 	return config.Merge(global, repo), nil
 }
 
